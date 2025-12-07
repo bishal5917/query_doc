@@ -1,0 +1,22 @@
+[project]
+name = "docquery"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "accelerate>=1.12.0",
+    "fastapi>=0.124.0",
+    "fastembed>=0.7.4",
+    "google-generativeai>=0.8.5",
+    "googleaistudio>=0.0.22",
+    "inngest>=0.5.13",
+    "llama-index-core>=0.14.10",
+    "llama-index-readers-file>=0.5.5",
+    "openai>=2.9.0",
+    "python-dotenv>=1.2.1",
+    "qdrant-client>=1.16.1",
+    "sentence-transformers>=5.1.2",
+    "streamlit>=1.52.1",
+    "uvicorn>=0.38.0",
+]
