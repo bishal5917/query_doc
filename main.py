@@ -32,14 +32,23 @@ load_dotenv()
 
 
 # Load model
-MODEL_NAME = "tiiuae/falcon-7b-instruct"  # LLaMA/Falcon model
+MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
     device_map="auto",        # Automatically put layers on CPU/GPU
     torch_dtype=torch.float16 # Saves memory, works best on GPU
 )
-generator = pipeline("text-generation", model=model, tokenizer=tokenizer, max_length=1024, temperature=0.2)
+# generator = pipeline("text-generation", model=model, tokenizer=tokenizer, max_length=1024, temperature=0.2)
+
+generator = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    max_new_tokens=256,   # ONLY controls generated output
+    temperature=0.2,
+    do_sample=False
+)
 
 inngest_client = inngest.Inngest(
     app_id = "doc_query",
@@ -86,20 +95,19 @@ async def query_doc(ctx:inngest.Context):
         return RAGSearchResult(contexts=found["contexts"], sources=found["sources"])
 
     question = ctx.event.data["question"]
-    top_k = int(ctx.event.data.get("top_k", 5))
+    top_k = int(ctx.event.data.get("top_k", 3))
 
     found = await ctx.step.run("embed-and-search", lambda:_search(question, top_k), output_type=RAGSearchResult)
 
     context_block = "\n\n".join(f"- {c}" for c in found.contexts)
     user_content = (
-        "Use the following context to answer the question.\n\n"
+        "Answer the question.\n\n"
         f"Context:\n{context_block}\n\n"
         f"Question: {question}\n"
-        "Answer precisely using the context above."
     )
 
     # ---- LLaMA generation ----
-    response = generator(user_content)
+    response = generator(truncate_prompt(user_content))
     answer = response[0]["generated_text"].strip()
 
     print("Answer: ", answer)
@@ -107,6 +115,14 @@ async def query_doc(ctx:inngest.Context):
 
     return {"answer": answer, "sources": found.sources, "num_contexts": len(found.contexts)}
 
+
+def truncate_prompt(prompt: str) -> str:
+    MAX_INPUT_TOKENS = 1800  # leave room for answer
+
+    tokens = tokenizer.encode(prompt, add_special_tokens=False)
+    if len(tokens) > MAX_INPUT_TOKENS:
+        tokens = tokens[-MAX_INPUT_TOKENS:]  # keep last part (question + recent context)
+    return tokenizer.decode(tokens)
 
 app = FastAPI()
 

@@ -38,19 +38,12 @@ class QdrantStorage:
             limit=top_k
         )
 
-        # print("query_vector", query_vector)
-        # print("results", results)
-
         contexts = []
         sources = set()
 
-        for item in results:
-            # Check if it's a wrapper object
-            if hasattr(item, "scored_point"):
-                result = item.scored_point
-            else:
-                result = item
+        print(type(results))
 
+        for result in results.points:
             payload = getattr(result, "payload", {}) or {}
             text = payload.get("text")
             source = payload.get("source")

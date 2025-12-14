@@ -8,7 +8,7 @@ from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
-splitter = SentenceSplitter(chunk_size=1000, chunk_overlap=200)
+splitter = SentenceSplitter(chunk_size=300, chunk_overlap=50)
 
 # genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 # genai.configure(api_key=GOOGLE_API_KEY)
