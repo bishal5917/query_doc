@@ -24,12 +24,6 @@ class QdrantStorage:
 
     def search(self, query_vector, query_text, top_k: int = 5):
 
-        # results = self.client.query(
-        #     collection_name=self.collection,
-        #     query_text = query_text,
-        #     limit=top_k
-        # )
-
         results = self.client.query_points(
             collection_name=self.collection,
             query=query_vector,

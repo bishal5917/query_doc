@@ -10,3 +10,6 @@ wheels/
 .venv
 
 dotenv
+uploads
+qdrant_storage
+ollama

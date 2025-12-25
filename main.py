@@ -2,19 +2,14 @@ import logging
 from fastapi import FastAPI
 import inngest
 import inngest.fast_api
-from inngest import Inngest
-from inngest.experimental import ai
 from dotenv import load_dotenv
 import uuid
-import os
-import datetime
 
 from data_loader import load_and_chunk_pdf, embed_texts
+from llm import generate_with_ollama, check_ollama_connection
 from vector_db import QdrantStorage
 from custom_types import RAGChunkAndSrc, RAGUpsertResult, RAGSearchResult
 
-from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
-import torch
 
 load_dotenv()
 
@@ -30,25 +25,14 @@ load_dotenv()
 # Run qdrant vector database on docker locally
 # docker run -d --name qdrantRagDb -p 6333:6333 -v "$(pwd)/qdrant_storage:/qdrant/storage" qdrant/qdrant
 
+# Run ollama on docker locally
+# docker run -d --name ollama --gpus all -p 11434:11434 -v "$(pwd)/ollama:/ollama" ollama/ollama
 
-# Load model
-MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    device_map="auto",        # Automatically put layers on CPU/GPU
-    torch_dtype=torch.float16 # Saves memory, works best on GPU
-)
-# generator = pipeline("text-generation", model=model, tokenizer=tokenizer, max_length=1024, temperature=0.2)
+# Run streamlit application
+# uv run streamlit run .\streamlit_app.py
 
-generator = pipeline(
-    "text-generation",
-    model=model,
-    tokenizer=tokenizer,
-    max_new_tokens=256,   # ONLY controls generated output
-    temperature=0.2,
-    do_sample=False
-)
+OLLAMA_HOST = "http://localhost:11434"
+OLLAMA_MODEL = "llama3:8b"
 
 inngest_client = inngest.Inngest(
     app_id = "doc_query",
@@ -82,48 +66,51 @@ async def ingest_doc(ctx:inngest.Context):
     ingested = await ctx.step.run("embed-and-upsert", lambda: _upsert(chunks_and_src), output_type=RAGUpsertResult)
     return ingested.model_dump()
 
-@inngest_client.create_function(
-    fn_id = "RAG: Query DOC",
-    trigger = inngest.TriggerEvent(event="rag/query_doc")
-)
 
-async def query_doc(ctx:inngest.Context):
-    def _search(question: str, top_k: int = 5) -> RAGSearchResult:
+@inngest_client.create_function(
+    fn_id="RAG: Query DOC",
+    trigger=inngest.TriggerEvent(event="rag/query_doc")
+)
+async def query_doc(ctx: inngest.Context):
+
+    def _search(question: str, top_k: int):
         query_vec = embed_texts([question])[0]
         store = QdrantStorage()
-        found = store.search(query_vec, question, top_k)
-        return RAGSearchResult(contexts=found["contexts"], sources=found["sources"])
+        return store.search(query_vec, question, top_k)
 
     question = ctx.event.data["question"]
-    top_k = int(ctx.event.data.get("top_k", 3))
+    top_k = int(ctx.event.data.get("top_k", 5))
 
-    found = await ctx.step.run("embed-and-search", lambda:_search(question, top_k), output_type=RAGSearchResult)
-
-    context_block = "\n\n".join(f"- {c}" for c in found.contexts)
-    user_content = (
-        "Answer the question.\n\n"
-        f"Context:\n{context_block}\n\n"
-        f"Question: {question}\n"
+    found = await ctx.step.run(
+        "embed-and-search",
+        lambda: _search(question, top_k)
     )
 
-    # ---- LLaMA generation ----
-    response = generator(truncate_prompt(user_content))
-    answer = response[0]["generated_text"].strip()
+    context_block = "\n\n".join(f"- {c}" for c in found["contexts"])
 
-    print("Answer: ", answer)
-    print("Response: ", response)
+    prompt = (
+        "You are a helpful assistant. Answer the question strictly using the context provided.\n"
+        "If the answer is not contained in the context, respond with 'I don't know' and do not make up any information.\n\n"
+        f"Context:\n{context_block}\n\n"
+        f"Question: {question}\n"
+        "Answer:"
+    )
 
-    return {"answer": answer, "sources": found.sources, "num_contexts": len(found.contexts)}
+    answer = await ctx.step.run(
+        "ollama-generate",
+        lambda: generate_with_ollama(prompt, OLLAMA_HOST, OLLAMA_MODEL)
+    )
 
-
-def truncate_prompt(prompt: str) -> str:
-    MAX_INPUT_TOKENS = 1800  # leave room for answer
-
-    tokens = tokenizer.encode(prompt, add_special_tokens=False)
-    if len(tokens) > MAX_INPUT_TOKENS:
-        tokens = tokens[-MAX_INPUT_TOKENS:]  # keep last part (question + recent context)
-    return tokenizer.decode(tokens)
+    return {
+        "answer": answer,
+        "sources": found["sources"],
+        "num_contexts": len(found["contexts"])
+    }
 
 app = FastAPI()
 
 inngest.fast_api.serve(app, inngest_client, [ingest_doc, query_doc])
+
+if __name__ == "__main__":
+    print(check_ollama_connection(OLLAMA_HOST))
+    print(generate_with_ollama("Say hello in one sentence", OLLAMA_HOST, OLLAMA_MODEL))
