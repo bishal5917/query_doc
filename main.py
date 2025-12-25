@@ -5,11 +5,13 @@ import inngest.fast_api
 from dotenv import load_dotenv
 import uuid
 
+from sentence_transformers import SentenceTransformer
+
 from data_loader import load_and_chunk_pdf, embed_texts
 from llm import generate_with_ollama, check_ollama_connection
 from vector_db import QdrantStorage
 from custom_types import RAGChunkAndSrc, RAGUpsertResult, RAGSearchResult
-
+from eval import evaluate_answer
 
 load_dotenv()
 
@@ -30,6 +32,9 @@ load_dotenv()
 
 # Run streamlit application
 # uv run streamlit run .\streamlit_app.py
+
+# Loading a free embedding model
+embed_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_MODEL = "llama3:8b"
@@ -56,7 +61,7 @@ async def ingest_doc(ctx:inngest.Context):
     def _upsert(ctx: inngest.Context) -> RAGUpsertResult:
         chunks = chunks_and_src.chunks
         source_id = chunks_and_src.source_id
-        vecs = embed_texts(chunks)
+        vecs = embed_texts(chunks, embed_model)
         ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_id}:{i}")) for i in range(len(chunks))]
         payloads = [{"source": source_id, "text": chunks[i]} for i in range(len(chunks))]
         QdrantStorage().upsert(ids, vecs, payloads)
@@ -74,7 +79,7 @@ async def ingest_doc(ctx:inngest.Context):
 async def query_doc(ctx: inngest.Context):
 
     def _search(question: str, top_k: int):
-        query_vec = embed_texts([question])[0]
+        query_vec = embed_texts([question], embed_model)[0]
         store = QdrantStorage()
         return store.search(query_vec, question, top_k)
 
@@ -101,11 +106,15 @@ async def query_doc(ctx: inngest.Context):
         lambda: generate_with_ollama(prompt, OLLAMA_HOST, OLLAMA_MODEL)
     )
 
-    return {
+    resp =  {
         "answer": answer,
         "sources": found["sources"],
         "num_contexts": len(found["contexts"])
     }
+
+    evaluate_answer(answer=answer, sources=found["sources"], embed_model=embed_model)
+
+    return resp
 
 app = FastAPI()
 
